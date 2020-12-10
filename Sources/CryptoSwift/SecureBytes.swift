@@ -13,12 +13,61 @@
 //  - This notice may not be removed or altered from any source or binary distribution.
 //
 
+
+//https://linux.die.net/man/2/mlock
+
+typealias MemoryLockImpl = (_ address: UnsafeRawPointer?, _ length: Int) -> Int32
+typealias MemoryUnlockImpl = (_ address: UnsafeRawPointer?, _ length: Int) -> Int32
+
 #if canImport(Darwin)
 import Darwin
+
+let lockMemory: MemoryLockImpl = Darwin.mlock
+let unlockMemory: MemoryUnlockImpl = Darwin.munlock
+
 #elseif canImport(Glibc)
 import Glibc
+
+let lockMemory: MemoryLockImpl = Glibc.mlock
+let unlockMemory: MemoryUnlockImpl = Glibc.munlock
 #elseif canImport(WinSDK)
 import WinSDK
+
+let lockMemory: MemoryLockImpl = { (address: UnsafeRawPointer?,  length: Int) -> Int32 in
+    VirtualLock(UnsafeMutableRawPointer(mutating: address), SIZE_T(length))
+}
+
+let unlockMemory: MemoryUnlockImpl = { (address: UnsafeRawPointer?,  length: Int) -> Int32 in
+    VirtualUnlock(UnsafeMutableRawPointer(mutating: address), SIZE_T(length))
+}
+
+#elseif canImport(WASILibc)
+import WASILibc
+
+func wasiNotImplementedWarning() {
+    
+    let msg = """
+    ⚠️ WARNING! Potential unsafe use of `CryptoSwift.SecureBytes` ⚠️
+    WASILibc found but `mman.h` has not been compiled for WASILibc
+    See SwiftWasm issue: https://github.com/swiftwasm/swift/issues/2315
+    No locking/unlocking of sensitive memory in SecureBytes is being performed.
+    """
+    
+    print(msg)
+}
+
+let lockMemory: MemoryLockImpl = { (address: UnsafeRawPointer?,  length: Int) -> Int32 in
+    /* Nothing to do */
+    wasiNotImplementedWarning()
+    return 0
+}
+
+let unlockMemory: MemoryUnlockImpl = { (address: UnsafeRawPointer?,  length: Int) -> Int32 in
+    /* Nothing to do */
+    wasiNotImplementedWarning()
+    return 0
+}
+
 #endif
 
 typealias Key = SecureBytes
@@ -33,21 +82,13 @@ final class SecureBytes {
     self.bytes = bytes
     self.count = bytes.count
     self.bytes.withUnsafeBufferPointer { (pointer) -> Void in
-      #if os(Windows)
-        VirtualLock(UnsafeMutableRawPointer(mutating: pointer.baseAddress), SIZE_T(pointer.count))
-      #else
-        mlock(pointer.baseAddress, pointer.count)
-      #endif
+        _ = lockMemory(pointer.baseAddress, pointer.count)
     }
   }
 
   deinit {
     self.bytes.withUnsafeBufferPointer { (pointer) -> Void in
-      #if os(Windows)
-        VirtualUnlock(UnsafeMutableRawPointer(mutating: pointer.baseAddress), SIZE_T(pointer.count))
-      #else
-        munlock(pointer.baseAddress, pointer.count)
-      #endif
+        _ = unlockMemory(pointer.baseAddress, pointer.count)
     }
   }
 }
